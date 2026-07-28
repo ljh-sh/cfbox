@@ -1,0 +1,24 @@
+{
+	// cfbox — single Cloudflare Worker serving all services via pathname dispatch.
+	//
+	// Shipped so far:
+	//   - /myip           → echo client IP (with location, from CF req.cf)
+	//   - /short          → short-link service (POST → code; GET /r/<code> → 302)
+	//
+	// Live: https://cfbox.ljh.sh/<service>
+
+	"name": "cfbox",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-06-01",
+
+	"kv_namespaces": [
+		{ "binding": "SHORT_KV", "id": "68d71dd631884158bee2344d682f5687" }
+	],
+
+	"routes": [
+		{
+			"pattern": "cfbox.ljh.sh/*",
+			"zone_name": "ljh.sh"
+		}
+	]
+}

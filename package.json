@@ -1,0 +1,19 @@
+{
+	"name": "cfbox",
+	"version": "0.1.0",
+	"private": false,
+	"description": "Simple webservice toolbox on Cloudflare Workers — cfbox.<your-domain>/<service>",
+	"license": "MIT",
+	"type": "module",
+	"scripts": {
+		"dev": "wrangler dev",
+		"deploy": "wrangler deploy",
+		"types": "wrangler types",
+		"check": "tsc --noEmit"
+	},
+	"devDependencies": {
+		"@cloudflare/workers-types": "^4.20250109.0",
+		"typescript": "^5.6.0",
+		"wrangler": "^3.99.0"
+	}
+}
