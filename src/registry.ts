@@ -13,6 +13,7 @@ import { cron } from './services/cron';
 import { cf } from './services/cf';
 import { doh } from './services/doh';
 import { services } from './services/services';
+import { md } from './services/md';
 
 export const registry: Record<string, Service> = {
 	myip,
@@ -36,4 +37,6 @@ export const registry: Record<string, Service> = {
 	dns: doh, // /dns (legacy wrapper, kept for backward compat)
 	// /services — service catalog for hub integration (introspect)
 	services,
+	// /md — HTML → Markdown (turndown + Readability)
+	md,
 };
