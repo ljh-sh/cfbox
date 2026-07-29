@@ -14,6 +14,10 @@
 // only with URLs you trust, or POST in your own data.
 
 import type { Service } from '../types';
+import { preflight, readBoundedBody } from '../safety';
+
+const MAX_REQ_BYTES = 10 * 1024 * 1024; // 10 MiB inbound
+const MAX_RES_BYTES = 10 * 1024 * 1024; // 10 MiB upstream response
 
 function json(body: unknown, status = 200): Response {
 	return new Response(JSON.stringify(body, null, 2), {
@@ -245,6 +249,20 @@ export const httpget: Service = {
 	},
 	fetch: async (req, env, ctx) => {
 		const u = new URL(req.url);
+		const targetUrl = u.searchParams.get('url');
+
+		// Rate limit (per-IP) + SSRF guard on target URL. Post body size cap
+		// happens later in the POST branch. Also block the request's own host
+		// to prevent loopback amplification.
+		const selfHost = new URL(req.url).hostname.toLowerCase();
+		const pre = await preflight(req, {
+			route: 'httpget',
+			limit: 30,
+			windowSec: 60,
+			targetUrl: targetUrl ?? undefined,
+			extraDenyHosts: [selfHost],
+		});
+		if (pre) return pre;
 
 		// Resolve conv from either /conv/<op> path or ?conv=X query (path wins for clarity).
 		let conv = '';
@@ -271,7 +289,6 @@ export const httpget: Service = {
 		let upstreamContentType: string | null = null;
 
 		if (req.method === 'GET') {
-			const targetUrl = u.searchParams.get('url');
 			if (!targetUrl) return json({ error: 'GET requires ?url=X (or use POST body)' }, 400);
 			if (!/^https?:\/\//.test(targetUrl)) return json({ error: 'url must start with http(s)://' }, 400);
 			let upstream: Response;
@@ -283,8 +300,16 @@ export const httpget: Service = {
 			if (!upstream.ok) return json({ error: `upstream HTTP ${upstream.status}` }, 502);
 			finalUrl = upstream.url || targetUrl;
 			upstreamContentType = upstream.headers.get('content-type');
-			// Buffer input — for text convs decode as text; for bytes convs keep raw.
+			// Cap upstream response size. CF will error on stream-read > 10MB? No —
+			// we need to enforce ourselves. Read with a manual cap.
+			const cl = upstream.headers.get('content-length');
+			if (cl && parseInt(cl, 10) > MAX_RES_BYTES) {
+				return json({ error: 'upstream too large', maxBytes: MAX_RES_BYTES }, 413);
+			}
 			const ab = await upstream.arrayBuffer();
+			if (ab.byteLength > MAX_RES_BYTES) {
+				return json({ error: 'upstream too large', maxBytes: MAX_RES_BYTES }, 413);
+			}
 			bytes = new Uint8Array(ab);
 			if (TEXT_CONVS.has(conv)) {
 				try {
@@ -295,8 +320,9 @@ export const httpget: Service = {
 			}
 		} else if (req.method === 'POST') {
 			const ct = req.headers.get('content-type') ?? '';
-			const ab = await req.arrayBuffer();
-			bytes = new Uint8Array(ab);
+			const bounded = await readBoundedBody(req, MAX_REQ_BYTES);
+			if (bounded instanceof Response) return bounded;
+			bytes = bounded;
 			if (TEXT_CONVS.has(conv)) {
 				text = new TextDecoder('utf-8').decode(bytes);
 			}

@@ -14,6 +14,10 @@
 // design.md §14). Pure regex keeps the bundle slim and matches v0.5 needs.
 
 import type { Service } from '../types';
+import { preflight, readBoundedBody } from '../safety';
+
+const MAX_REQ_BYTES = 5 * 1024 * 1024; // 5 MiB inbound HTML
+const MAX_RES_BYTES = 5 * 1024 * 1024; // 5 MiB upstream response
 
 function json(body: unknown, status = 200): Response {
 	return new Response(JSON.stringify(body, null, 2), {
@@ -286,34 +290,61 @@ export const md: Service = {
 		const path = u.pathname;
 		const targetUrl = u.searchParams.get('url');
 
+		// Rate limit (per-IP) + SSRF guard for outbound fetches. Block the
+		// request's own host to prevent loopback amplification.
+		const selfHost = new URL(req.url).hostname.toLowerCase();
+		const pre = await preflight(req, {
+			route: 'md',
+			limit: 30,
+			windowSec: 60,
+			targetUrl: targetUrl ?? undefined,
+			extraDenyHosts: [selfHost],
+		});
+		if (pre) return pre;
+
 		let html: string;
 		let finalUrl = '';
 		if (req.method === 'GET' && targetUrl) {
 			if (!/^https?:\/\//.test(targetUrl)) {
 				return json({ error: 'url must start with http(s)://' }, 400);
 			}
+			// Cap upstream response size.
+			let upstream: Response;
 			try {
-				const r = await fetchHtml(targetUrl);
-				html = r.html;
-				finalUrl = r.finalUrl;
+				upstream = await fetch(targetUrl, {
+					headers: { 'user-agent': 'cfbox-md/0.6 (+https://cfbox.ljh.sh)' },
+					redirect: 'follow',
+				});
 			} catch (e) {
 				return json({ error: `fetch failed: ${(e as Error).message}` }, 502);
 			}
+			if (!upstream.ok) {
+				return json({ error: `upstream HTTP ${upstream.status}` }, 502);
+			}
+			const cl = upstream.headers.get('content-length');
+			if (cl && parseInt(cl, 10) > MAX_RES_BYTES) {
+				return json({ error: 'upstream too large', maxBytes: MAX_RES_BYTES }, 413);
+			}
+			const ab = await upstream.arrayBuffer();
+			if (ab.byteLength > MAX_RES_BYTES) {
+				return json({ error: 'upstream too large', maxBytes: MAX_RES_BYTES }, 413);
+			}
+			html = new TextDecoder('utf-8').decode(new Uint8Array(ab));
+			finalUrl = upstream.url || targetUrl;
 		} else if (req.method === 'POST') {
 			const ct = req.headers.get('content-type') ?? '';
 			if (ct.includes('application/json')) {
-				let body: { html?: unknown };
-				try {
-					body = (await req.json()) as { html?: unknown };
-				} catch {
-					return json({ error: 'invalid JSON body; expected {"html":"..."}' }, 400);
-				}
+				const bounded = await readBoundedBody(req, MAX_REQ_BYTES);
+				if (bounded instanceof Response) return bounded;
+				const body = JSON.parse(new TextDecoder('utf-8').decode(bounded)) as { html?: unknown };
 				if (typeof body.html !== 'string') {
 					return json({ error: 'expected JSON {html:"..."}' }, 400);
 				}
 				html = body.html;
 			} else {
-				html = await req.text();
+				const bounded = await readBoundedBody(req, MAX_REQ_BYTES);
+				if (bounded instanceof Response) return bounded;
+				html = new TextDecoder('utf-8').decode(bounded);
 			}
 			if (!html.trim()) {
 				return json({ error: 'empty body; POST JSON {html:"..."} or raw HTML' }, 400);

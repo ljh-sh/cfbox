@@ -13,6 +13,7 @@
 // edge.
 
 import type { Service } from '../types';
+import { rateLimit } from '../safety';
 
 function json(body: unknown, status = 200): Response {
 	return new Response(JSON.stringify(body, null, 2), {
@@ -227,6 +228,11 @@ export const ipinfo: Service = {
 		},
 	},
 	fetch: async (req, env, ctx) => {
+		// Per-IP rate limit. Outbound is fixed (CF DoH + Team Cymru + ip-api.com),
+		// so no SSRF surface — but tighten so we don't burn ip-api.com's 45 req/min.
+		const rl = await rateLimit(req, { route: 'ipinfo', limit: 20, windowSec: 60 });
+		if (rl) return rl;
+
 		let ips: string[] = [];
 
 		if (req.method === 'POST') {

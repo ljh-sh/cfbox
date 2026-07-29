@@ -15,6 +15,7 @@
 //   /doh?dns=<b64url>   (RFC 8484 wire-format query, binary)
 
 import type { Service } from '../types';
+import { rateLimit } from '../safety';
 
 function json(body: unknown, status = 200): Response {
 	return new Response(JSON.stringify(body, null, 2), {
@@ -304,9 +305,13 @@ export const doh: Service = {
 			cn: 'DoH 端点（wire-format + JSON-DoH + 自描述 wrapper）',
 		},
 	},
-	fetch: async (req, u) => {
+	fetch: async (req, env, ctx) => {
 		const url = new URL(req.url);
 		const path = url.pathname;
+
+		// Per-IP rate limit. Outbound is fixed (1.1.1.1), so no SSRF surface.
+		const rl = await rateLimit(req, { route: 'doh', limit: 60, windowSec: 60 });
+		if (rl) return rl;
 
 		// Aliases for compatibility
 		const isWireAlias = path === '/dns-query';

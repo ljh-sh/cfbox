@@ -1,7 +1,9 @@
 // src/services/unshorten.ts — follow redirect chain to reveal final URL.
-// SSRF guard: reject localhost / RFC1918 / link-local targets.
+// SSRF guard: reject localhost / RFC1918 / link-local targets (now shared via
+// ../safety).
 
 import type { Service } from '../types';
+import { preflight, checkUrl } from '../safety';
 
 function json(body: unknown, status = 200): Response {
 	return new Response(JSON.stringify(body, null, 2), {
@@ -13,37 +15,9 @@ function json(body: unknown, status = 200): Response {
 	});
 }
 
-function isHttpUrl(s: string): boolean {
-	try {
-		const u = new URL(s);
-		return u.protocol === 'http:' || u.protocol === 'https:';
-	} catch {
-		return false;
-	}
-}
-
-function isInternalHost(url: string): boolean {
-	try {
-		const u = new URL(url);
-		const host = u.hostname.toLowerCase();
-		if (host === 'localhost' || host === '0.0.0.0' || host === '::') return true;
-		if (host.endsWith('.local') || host.endsWith('.internal')) return true;
-		// RFC1918 + link-local + loopback
-		if (
-			/^(127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|169\.254\.)/.test(
-				host,
-			)
-		) {
-			return true;
-		}
-		return false;
-	} catch {
-		return true;
-	}
-}
-
 const MAX_HOPS = 10;
 const UA = 'cfbox/0.5 (+https://cfbox.ljh.sh)';
+const SELF_HOST = 'cfbox.ljh.sh';
 
 export const unshorten: Service = {
 	meta: {
@@ -55,10 +29,19 @@ export const unshorten: Service = {
 		const u = new URL(req.url);
 		const target = u.searchParams.get('url');
 		if (!target) return json({ error: 'url query param required' }, 400);
-		if (!isHttpUrl(target)) return json({ error: 'must be http(s)' }, 400);
-		if (isInternalHost(target)) {
-			return json({ error: 'internal host blocked (SSRF guard)' }, 403);
-		}
+
+		// Rate limit + SSRF guard on the initial target. Block the request's
+		// own host to prevent loopback amplification (e.g. unshorten through
+		// /httpget on the same zone).
+		const selfHost = new URL(req.url).hostname.toLowerCase();
+		const pre = await preflight(req, {
+			route: 'unshorten',
+			limit: 30,
+			windowSec: 60,
+			targetUrl: target,
+			extraDenyHosts: [selfHost],
+		});
+		if (pre) return pre;
 
 		const chain: Array<{
 			url: string;
@@ -98,6 +81,13 @@ export const unshorten: Service = {
 			}
 			if (next === current || seen.has(next)) {
 				chain.push({ url: next, status: 0, location: null, error: 'loop detected' });
+				break;
+			}
+			// SSRF guard on each hop (DNS rebinding / cross-origin redirector).
+			// Block self-host (cfbox.ljh.sh) to prevent loopback amplification.
+			const hop = checkUrl(next, { extraDenyHosts: [SELF_HOST] });
+			if (!hop.ok) {
+				chain.push({ url: next, status: 0, location: null, error: `blocked: ${hop.reason}` });
 				break;
 			}
 			seen.add(next);
