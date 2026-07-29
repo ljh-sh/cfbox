@@ -14,6 +14,8 @@ import { cf } from './services/cf';
 import { doh } from './services/doh';
 import { services } from './services/services';
 import { md } from './services/md';
+import { ipinfo } from './services/ipinfo';
+import { httpget } from './services/httpget';
 
 export const registry: Record<string, Service> = {
 	myip,
@@ -37,6 +39,13 @@ export const registry: Record<string, Service> = {
 	dns: doh, // /dns (legacy wrapper, kept for backward compat)
 	// /services — service catalog for hub integration (introspect)
 	services,
-	// /md — HTML → Markdown (turndown + Readability)
+	// /md — HTML → Markdown (regex-based)
 	md,
+	// /ipinfo — PTR + ASN for arbitrary IPs (multi-IP)
+	ipinfo,
+	// /httpget — Smart download proxy + transform (?conv=gzip|ungz|json2tsv|jsonl2tsv)
+	httpget,
+	// /conv — alias namespace for /httpget ops (e.g. /conv/gzip, /conv/json2tsv).
+	// Same handler; dispatcher uses pathname-vs-query to pick the op.
+	conv: httpget,
 };
