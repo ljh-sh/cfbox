@@ -16,6 +16,7 @@ import { services } from './services/services';
 import { md } from './services/md';
 import { ipinfo } from './services/ipinfo';
 import { httpget } from './services/httpget';
+import { admin } from './services/admin';
 
 export const registry: Record<string, Service> = {
 	myip,
@@ -48,4 +49,6 @@ export const registry: Record<string, Service> = {
 	// /conv — alias namespace for /httpget ops (e.g. /conv/gzip, /conv/json2tsv).
 	// Same handler; dispatcher uses pathname-vs-query to pick the op.
 	conv: httpget,
+	// /admin — runtime-mutable admin endpoints (lockdown toggle, etc.)
+	admin,
 };

@@ -228,10 +228,16 @@ export const ipinfo: Service = {
 		},
 	},
 	fetch: async (req, env, ctx) => {
-		// Per-IP rate limit. Outbound is fixed (CF DoH + Team Cymru + ip-api.com),
-		// so no SSRF surface — but tighten so we don't burn ip-api.com's 45 req/min.
-		const rl = await rateLimit(req, { route: 'ipinfo', limit: 20, windowSec: 60 });
-		if (rl) return rl;
+		// Token gate + per-bucket rate limit. Outbound is fixed (CF DoH + Team
+		// Cymru + ip-api.com), so no SSRF surface — but tighten so we don't
+		// burn ip-api.com's 45 req/min free tier.
+		const pre = await preflight(req, env, {
+			route: 'ipinfo',
+			limit: 20,
+			windowSec: 60,
+			requireToken: true,
+		});
+		if (pre) return pre;
 
 		let ips: string[] = [];
 

@@ -3,13 +3,16 @@
 // Two responsibilities:
 //   1. URL safety: reject private/loopback/link-local targets before fetch().
 //      DNS-rebinding is a known residual risk (see cfbox-design/abuse-risk.md §3).
-//   2. Per-IP per-route rate limiting using Cache API edge state.
+//   2. Per-bucket per-route rate limiting using Cache API edge state.
 //
 // Why Cache API:
 //   - Worker-isolated, no extra bindings needed.
 //   - Cheap read (in-memory in most PoPs).
 //   - Soft enforcement (CF can evict); fine for personal-toolbox tier.
 //   - For a paid tier, swap to KV with hard EX TTL.
+
+import { checkToken, type AuthEnv } from './auth';
+import { getRouteConfig } from './config';
 
 const IPV4_RE = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
 const IPV4_MAPPED_RE = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i;
@@ -161,12 +164,18 @@ export interface RateLimitOpts {
 	route: string;
 	limit: number;
 	windowSec: number;
+	/**
+	 * Bucket key (per-IP if not set). Caller passes either
+	 * `ip:<ip>` (public mode) or `token:<hash>` (token-gated mode).
+	 */
+	key?: string;
 }
 
 export async function rateLimit(req: Request, opts: RateLimitOpts): Promise<Response | null> {
 	const ip = req.headers.get('cf-connecting-ip') || 'unknown';
+	const keyName = opts.key ?? `ip:${ip}`;
 	const bucket = Math.floor(Date.now() / 1000 / opts.windowSec);
-	const key = `https://ratelimit.internal/${opts.route}/${ip}/${bucket}`;
+	const key = `https://ratelimit.internal/${opts.route}/${keyName}/${bucket}`;
 	const cache = caches.default;
 	let count = 0;
 	try {
@@ -239,15 +248,160 @@ export interface PreflightOpts {
 	windowSec: number;
 	targetUrl?: string;
 	extraDenyHosts?: string[];
+	/**
+	 * When true, the request must carry a valid token (or CFBOX_TOKEN must be
+	 * unset → public mode). The rate-limit bucket is keyed on the token
+	 * hash (or per-IP in public mode).
+	 */
+	requireToken?: boolean;
+}
+
+export interface PreflightOpts {
+	/** Route name from config.ts (or any custom key for ad-hoc). */
+	route: string;
+	/** Override the route's configured rate limit. Optional. */
+	limit?: number;
+	/** Override the route's configured window. Optional. */
+	windowSec?: number;
+	targetUrl?: string;
+	extraDenyHosts?: string[];
+	/**
+	 * Override the route's `tokenRequired` flag. If undefined, reads from
+	 * config.ts. Default false (public, with per-IP rate limit).
+	 */
+	tokenRequired?: boolean;
 }
 
 /**
- * Combined rate-limit + URL guard. Returns null to proceed, or a Response
- * to short-circuit (429 rate, 403 URL).
+ * Lockdown check — returns 503 if lockdown is active and caller is anonymous.
+ * Token-holders bypass lockdown.
+ *
+ * Lockdown flag is stored in KV (`cfbox:lockdown`). Auto-expires (TTL set
+ * when written) so a forgotten admin won't accidentally block public access
+ * forever.
  */
-export async function preflight(req: Request, opts: PreflightOpts): Promise<Response | null> {
-	const rl = await rateLimit(req, { route: opts.route, limit: opts.limit, windowSec: opts.windowSec });
-	if (rl) return rl;
+export async function checkLockdown(req: Request, env: AuthEnv): Promise<Response | null> {
+	// Token-holders bypass lockdown.
+	if (env.CFBOX_TOKEN) {
+		const t = await checkToken(req, env);
+		if (t.ok) return null;
+	}
+	// Anonymous: check the flag.
+	const v = await env.SHORT_KV.get('cfbox:lockdown');
+	if (v === null) return null;
+	// Lockdown active. Return 503 with hint.
+	const until = v; // free-form text, e.g. ISO timestamp or "until-cleared"
+	return new Response(
+		JSON.stringify({
+			error: 'public access paused',
+			reason: 'cfbox is in lockdown mode (anonymous access blocked)',
+			until,
+			hint: 'supply x-cfbox-token header to bypass',
+		}),
+		{
+			status: 503,
+			headers: {
+				'content-type': 'application/json; charset=utf-8',
+				'cache-control': 'no-store',
+				'retry-after': '3600',
+			},
+		},
+	);
+}
+
+/**
+ * Set the lockdown flag. Body: { ttlSec: number, until: string? }.
+ * Token required.
+ */
+export async function setLockdown(env: AuthEnv, body: { ttlSec?: number; until?: string }): Promise<void> {
+	const ttl = Math.min(Math.max(body.ttlSec ?? 3600, 60), 86400 * 7);
+	const until = body.until ?? new Date(Date.now() + ttl * 1000).toISOString();
+	await env.SHORT_KV.put('cfbox:lockdown', until, { expirationTtl: ttl });
+}
+
+/** Clear the lockdown flag. Token required. */
+export async function clearLockdown(env: AuthEnv): Promise<void> {
+	await env.SHORT_KV.delete('cfbox:lockdown');
+}
+
+/** Read the current lockdown status. */
+export async function getLockdownStatus(env: AuthEnv): Promise<{ active: boolean; until?: string }> {
+	const v = await env.SHORT_KV.get('cfbox:lockdown');
+	if (v === null) return { active: false };
+	return { active: true, until: v };
+}
+
+/**
+ * Pre-flight: token + lockdown + rate-limit + URL guard. Returns null to
+ * proceed, or a Response to short-circuit.
+ *
+ * Order:
+ *   1. Lockdown (anonymous only)      → 503 if active
+ *   2. Token / tokenRequired check    → 401 if needed
+ *   3. Rate limit (per-token or per-IP) → 429 if exceeded
+ *   4. URL guard                      → 403 if blocked
+ */
+export async function preflight(
+	req: Request,
+	env: AuthEnv,
+	opts: PreflightOpts,
+): Promise<Response | null> {
+	const cfg = getRouteConfig(opts.route);
+	const tokenRequired = opts.tokenRequired ?? cfg.tokenRequired;
+
+	// 1. Lockdown (anonymous only — token-holders bypass).
+	const lock = await checkLockdown(req, env);
+	if (lock) return lock;
+
+	// 2. Token check.
+	let tokenOk = false;
+	let tokenBucket: string | null = null;
+	if (env.CFBOX_TOKEN) {
+		const t = await checkToken(req, env);
+		if (t.ok) {
+			tokenOk = true;
+			tokenBucket = t.bucket;
+		} else if (tokenRequired) {
+			return t.response!;
+		}
+	} else if (tokenRequired) {
+		return new Response(
+			JSON.stringify({
+				error: 'route requires token, but CFBOX_TOKEN is unset',
+				hint: 'set CFBOX_TOKEN via `wrangler secret put CFBOX_TOKEN`, or flip tokenRequired to false in config.ts',
+			}),
+			{
+				status: 503,
+				headers: { 'content-type': 'application/json; charset=utf-8' },
+			},
+		);
+	}
+
+	// 3. Rate limit.
+	let limit: number;
+	let windowSec: number;
+	let bucketKey: string;
+	if (tokenOk && tokenBucket) {
+		limit = opts.limit ?? cfg.ratePerToken;
+		windowSec = opts.windowSec ?? cfg.windowSec;
+		bucketKey = tokenBucket;
+	} else {
+		const ip = req.headers.get('cf-connecting-ip') || 'unknown';
+		limit = opts.limit ?? cfg.ratePerIP;
+		windowSec = opts.windowSec ?? cfg.windowSec;
+		bucketKey = `ip:${ip}`;
+	}
+	if (limit > 0) {
+		const rl = await rateLimit(req, {
+			route: opts.route,
+			limit,
+			windowSec,
+			key: bucketKey,
+		});
+		if (rl) return rl;
+	}
+
+	// 4. URL guard.
 	if (opts.targetUrl) {
 		const g = guardUrl(opts.targetUrl, { extraDenyHosts: opts.extraDenyHosts });
 		if (g) return g;

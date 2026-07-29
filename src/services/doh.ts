@@ -15,7 +15,7 @@
 //   /doh?dns=<b64url>   (RFC 8484 wire-format query, binary)
 
 import type { Service } from '../types';
-import { rateLimit } from '../safety';
+import { preflight } from '../safety';
 
 function json(body: unknown, status = 200): Response {
 	return new Response(JSON.stringify(body, null, 2), {
@@ -309,9 +309,15 @@ export const doh: Service = {
 		const url = new URL(req.url);
 		const path = url.pathname;
 
-		// Per-IP rate limit. Outbound is fixed (1.1.1.1), so no SSRF surface.
-		const rl = await rateLimit(req, { route: 'doh', limit: 60, windowSec: 60 });
-		if (rl) return rl;
+		// Token gate + per-bucket rate limit. Outbound is fixed (1.1.1.1), so
+		// no SSRF surface.
+		const pre = await preflight(req, env, {
+			route: 'doh',
+			limit: 60,
+			windowSec: 60,
+			requireToken: true,
+		});
+		if (pre) return pre;
 
 		// Aliases for compatibility
 		const isWireAlias = path === '/dns-query';

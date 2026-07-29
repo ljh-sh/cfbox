@@ -17,15 +17,27 @@ function json(body: unknown, status = 200): Response {
 
 const SERVICES_PATH = '/services';
 
-// Heuristic auth detection — service name patterns we gate with ADMIN_PASS.
-// Hub uses this to know which endpoints to pre-acquire a session for.
-function authLevel(name: string): 'none' | 'admin' | 'session' {
-	const writes = ['short', 'paste', 'sendmail', 'cf']; // cf owns /cf/fetch which is admin
-	const reads = ['r']; // alias to short, doesn't add auth
-	if (writes.includes(name)) return 'admin';
-	if (reads.includes(name)) return 'none';
-	return 'none';
+// Heuristic auth detection — service name patterns we gate with CFBOX_TOKEN.
+// Hub uses this to know which endpoints to pre-acquire a token for.
+function authLevel(name: string): 'none' | 'token' | 'admin' {
+	// `admin` is reserved for a future per-user admin path; current cfbox has
+	// only the single shared token.
+	return TOKEN_GATED.has(name) ? 'token' : 'none';
 }
+
+// All token-gated services. /cf is gated because /cf/fetch is gated.
+const TOKEN_GATED = new Set([
+	'httpget',
+	'md',
+	'unshorten',
+	'doh',
+	'ipinfo',
+	'short',
+	'paste',
+	'sendmail',
+	'cf',
+	'admin',
+]);
 
 function methodsFor(name: string): string[] {
 	// Most services accept both GET and (sometimes) POST/PUT.

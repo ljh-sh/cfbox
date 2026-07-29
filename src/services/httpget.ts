@@ -251,16 +251,17 @@ export const httpget: Service = {
 		const u = new URL(req.url);
 		const targetUrl = u.searchParams.get('url');
 
-		// Rate limit (per-IP) + SSRF guard on target URL. Post body size cap
-		// happens later in the POST branch. Also block the request's own host
-		// to prevent loopback amplification.
+		// Rate limit (per-IP, or per-token when CFBOX_TOKEN is set) + SSRF guard
+		// on target URL. Also block the request's own host to prevent loopback
+		// amplification.
 		const selfHost = new URL(req.url).hostname.toLowerCase();
-		const pre = await preflight(req, {
+		const pre = await preflight(req, env, {
 			route: 'httpget',
 			limit: 30,
 			windowSec: 60,
 			targetUrl: targetUrl ?? undefined,
 			extraDenyHosts: [selfHost],
+			requireToken: true,
 		});
 		if (pre) return pre;
 

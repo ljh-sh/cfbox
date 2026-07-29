@@ -5,6 +5,7 @@
 // index service (`/`) is NOT part of cfbox (deferred to a separate project).
 
 import { registry } from './registry';
+import { checkLockdown } from './safety';
 
 export default {
 	async fetch(
@@ -15,6 +16,11 @@ export default {
 		const url = new URL(req.url);
 		const segments = url.pathname.split('/').filter(Boolean);
 		const serviceName = segments[0];
+
+		// Global lockdown check (anonymous only — token-holders bypass).
+		// Runs BEFORE route dispatch so /myip, /hash, etc. also block.
+		const lock = await checkLockdown(req, env);
+		if (lock) return lock;
 
 		if (!serviceName) {
 			return new Response(

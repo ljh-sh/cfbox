@@ -290,15 +290,17 @@ export const md: Service = {
 		const path = u.pathname;
 		const targetUrl = u.searchParams.get('url');
 
-		// Rate limit (per-IP) + SSRF guard for outbound fetches. Block the
-		// request's own host to prevent loopback amplification.
+		// Rate limit (per-IP, or per-token when CFBOX_TOKEN is set) + SSRF guard
+		// for outbound fetches. Block the request's own host to prevent
+		// loopback amplification.
 		const selfHost = new URL(req.url).hostname.toLowerCase();
-		const pre = await preflight(req, {
+		const pre = await preflight(req, env, {
 			route: 'md',
 			limit: 30,
 			windowSec: 60,
 			targetUrl: targetUrl ?? undefined,
 			extraDenyHosts: [selfHost],
+			requireToken: true,
 		});
 		if (pre) return pre;
 

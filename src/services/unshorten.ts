@@ -34,12 +34,13 @@ export const unshorten: Service = {
 		// own host to prevent loopback amplification (e.g. unshorten through
 		// /httpget on the same zone).
 		const selfHost = new URL(req.url).hostname.toLowerCase();
-		const pre = await preflight(req, {
+		const pre = await preflight(req, env, {
 			route: 'unshorten',
 			limit: 30,
 			windowSec: 60,
 			targetUrl: target,
 			extraDenyHosts: [selfHost],
+			requireToken: true,
 		});
 		if (pre) return pre;
 
