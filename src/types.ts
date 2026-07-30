@@ -18,6 +18,18 @@ export interface ServiceMeta {
 export interface Env {
 	/** KV namespace backing the /short service. Created via `wrangler kv namespace create SHORT_KV`. */
 	SHORT_KV: KVNamespace;
+	/**
+	 * Optional shared-secret token. When set, gated services require the
+	 * `x-cfbox-token` header (or `Authorization: Bearer <token>`). Set via
+	 * `wrangler secret put CFBOX_TOKEN`. Fail-closed: unset → gated services 401.
+	 */
+	CFBOX_TOKEN?: string;
+	/**
+	 * Optional path secret. When set, real endpoints live only at
+	 * `/<secret>/api/v2/<svc>`. All other paths return 404 (no exposure of
+	 * which routes exist). Set via `wrangler secret put CFBOX_PATHSECRET`.
+	 */
+	CFBOX_PATHSECRET?: string;
 }
 
 /**
