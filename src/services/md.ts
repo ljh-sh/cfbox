@@ -296,11 +296,10 @@ export const md: Service = {
 		const selfHost = new URL(req.url).hostname.toLowerCase();
 		const pre = await preflight(req, env, {
 			route: 'md',
-			limit: 30,
-			windowSec: 60,
+			limit: 5,
+			windowSec: 30,
 			targetUrl: targetUrl ?? undefined,
 			extraDenyHosts: [selfHost],
-			requireToken: true,
 		});
 		if (pre) return pre;
 

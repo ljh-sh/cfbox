@@ -36,11 +36,10 @@ export const unshorten: Service = {
 		const selfHost = new URL(req.url).hostname.toLowerCase();
 		const pre = await preflight(req, env, {
 			route: 'unshorten',
-			limit: 30,
-			windowSec: 60,
+			limit: 5,
+			windowSec: 30,
 			targetUrl: target,
 			extraDenyHosts: [selfHost],
-			requireToken: true,
 		});
 		if (pre) return pre;
 

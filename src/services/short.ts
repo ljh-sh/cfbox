@@ -15,6 +15,7 @@
 // Collision retry: 5 attempts before 503.
 
 import type { Service } from '../types';
+import { checkToken } from '../auth';
 
 const RANDOM_CODE_LEN = 8;
 const BASE62 =
@@ -22,31 +23,14 @@ const BASE62 =
 const VALID_CODE_RE = /^[A-Za-z0-9_-]{2,32}$/;
 
 /**
- * Admin password gate — protects every write to /short.
- * Pass can be supplied via JSON body field `pass` (POST) or query param `?pass=...` (GET).
- * This is the v0.3 hardcode for a single-user personal toolbox; swap for a real
- * secret (or CF API token check) when multi-user.
+ * Token gate. Pass token via `x-cfbox-token` header (or
+ * `Authorization: Bearer <token>`). Requires `CFBOX_TOKEN` env (set via
+ * `wrangler secret put CFBOX_TOKEN`). If unset, public mode (no gate).
  */
-const ADMIN_PASS = '123';
-
-function checkAdmin(
-	u: URL,
-	body?: { pass?: unknown },
-): { ok: true } | { ok: false; response: Response } {
-	const provided =
-		(typeof body?.pass === 'string' ? body.pass : null) ??
-		u.searchParams.get('pass');
-	if (provided === ADMIN_PASS) return { ok: true };
-	return {
-		ok: false,
-		response: json(
-			{
-				error:
-					'admin pass required (POST body field `pass` or `?pass=` query; v0.3 personal toolbox)',
-			},
-			401,
-		),
-	};
+async function requireToken(req: Request, env: Env): Promise<Response | null> {
+	const t = await checkToken(req, env);
+	if (!t.ok) return t.response!;
+	return null;
 }
 
 interface ShortMeta {
@@ -153,20 +137,19 @@ export const short: Service = {
 
 		// POST /short — programmatic create (returns JSON; custom code optional)
 		if (req.method === 'POST' && u.pathname === '/short') {
-			let body: { url?: unknown; code?: unknown; pass?: unknown };
+			// Token gate.
+			const auth = await requireToken(req, env);
+			if (auth) return auth;
+
+			let body: { url?: unknown; code?: unknown };
 			try {
 				body = (await req.json()) as {
 					url?: unknown;
 					code?: unknown;
-					pass?: unknown;
 				};
 			} catch {
 				return json({ error: 'invalid JSON body' }, 400);
 			}
-
-			// Admin gate.
-			const auth = checkAdmin(u, body);
-			if (!auth.ok) return auth.response;
 
 			const target = body.url;
 			if (typeof target !== 'string' || !isHttpUrl(target)) {
@@ -200,9 +183,9 @@ export const short: Service = {
 
 		// GET /short?url=X[&code=Y] — browser-friendly, optional custom code, returns 302
 		if (req.method === 'GET' && u.pathname === '/short') {
-			// Admin gate.
-			const auth = checkAdmin(u);
-			if (!auth.ok) return auth.response;
+			// Token gate.
+			const auth = await requireToken(req, env);
+			if (auth) return auth;
 
 			const target = u.searchParams.get('url');
 			if (!target) {

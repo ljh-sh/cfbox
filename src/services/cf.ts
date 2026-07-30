@@ -5,11 +5,10 @@
 //   /cf/tls             → TLS handshake info (version, cipher, ALPN)
 //   /cf/clock           → edge wallclock (use to detect clock skew)
 //   /cf/debug           → all CF-* headers (cf-ray, cf-cache-status, cf-pop, …)
-//   /cf/fetch?url=…     → fetch from edge IP (admin pass, SSRF guard)
+//   /cf/fetch?url=…     → fetch from edge IP (token via x-cfbox-token, SSRF guard)
 
 import type { Service } from '../types';
-
-const ADMIN_PASS = '123';
+import { checkToken } from '../auth';
 
 function json(body: unknown, status = 200): Response {
 	return new Response(JSON.stringify(body, null, 2), {
@@ -174,16 +173,13 @@ export const cf: Service = {
 			});
 		}
 
-		// /cf/fetch?url=...&pass=... — fetch from edge IP (admin pass, SSRF guard)
+		// /cf/fetch?url=... — fetch from edge IP (token via x-cfbox-token, SSRF guard)
 		if (path === '/cf/fetch') {
+			// Token gate.
+			const t = await checkToken(req, env);
+			if (!t.ok) return t.response!;
+
 			const target = u.searchParams.get('url');
-			const pass = u.searchParams.get('pass');
-			if (pass !== ADMIN_PASS) {
-				return json(
-					{ error: 'admin pass required (?pass=...)' },
-					401,
-				);
-			}
 			if (!target) return json({ error: 'url query param required' }, 400);
 			if (!isHttpUrl(target)) return json({ error: 'must be http(s)' }, 400);
 			if (isInternalHost(target)) {
@@ -229,7 +225,7 @@ export const cf: Service = {
 
 		// Fallback / unknown sub-path
 		return text(
-			'cfbox /cf — sub-paths: /cf/inspect | /cf/pop | /cf/tls | /cf/clock | /cf/debug | /cf/fetch?url=...&pass=...',
+			'cfbox /cf — sub-paths: /cf/inspect | /cf/pop | /cf/tls | /cf/clock | /cf/debug | /cf/fetch?url=... (token required)',
 			405,
 		);
 	},

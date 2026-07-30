@@ -1,11 +1,11 @@
 // src/services/paste.ts — pastebin (KV-backed).
-//   POST /paste      { text, pass, ttl? }            → 201 { code, url, ttl, size }
+//   POST /paste      { text, ttl? }  (token via x-cfbox-token)  → 201 { code, url, ttl, size }
 //   GET  /paste/<code>                              → plain text body
 // Reuses SHORT_KV namespace.
 
 import type { Service } from '../types';
+import { checkToken } from '../auth';
 
-const ADMIN_PASS = '123';
 const MAX_TEXT = 100_000;
 const BASE62 =
 	'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -42,8 +42,11 @@ export const paste: Service = {
 		const u = new URL(req.url);
 		// POST /paste — create
 		if (req.method === 'POST' && u.pathname === '/paste') {
+			// Token gate.
+			const t = await checkToken(req, env);
+			if (!t.ok) return t.response!;
+
 			let body: {
-				pass?: unknown;
 				text?: unknown;
 				ttl?: unknown;
 			};
@@ -51,9 +54,6 @@ export const paste: Service = {
 				body = (await req.json()) as typeof body;
 			} catch {
 				return json({ error: 'invalid JSON' }, 400);
-			}
-			if (body?.pass !== ADMIN_PASS) {
-				return json({ error: 'admin pass required' }, 401);
 			}
 			if (typeof body?.text !== 'string') {
 				return json({ error: '`text` required' }, 400);

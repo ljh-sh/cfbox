@@ -1,11 +1,11 @@
 // src/services/sendmail.ts — self-mail service via MailChannels.
-// v0.4 personal toolbox: admin-gated; intended for user→self mail
+// v0.6 personal toolbox: token-gated; intended for user→self mail
 // (notifications, OOB approval, etc.). Swap to Resend/SendGrid API
 // key for production-grade delivery & abuse controls.
 
 import type { Service } from '../types';
+import { checkToken } from '../auth';
 
-const ADMIN_PASS = '123';  // matches /short's gate; consolidate later
 const FROM_EMAIL = 'noreply@cfbox.ljh.sh';
 const FROM_NAME = 'cfbox';
 const MAILCHANNELS_URL = 'https://api.mailchannels.net/tx/v1/send';
@@ -33,13 +33,16 @@ export const sendmail: Service = {
 		const u = new URL(req.url);
 		if (req.method !== 'POST' || u.pathname !== '/sendmail') {
 			return json(
-				{ error: 'POST /sendmail {to, subject, text, pass}' },
+				{ error: 'POST /sendmail {to, subject, text} (token via x-cfbox-token)' },
 				405,
 			);
 		}
 
+		// Token gate.
+		const t = await checkToken(req, env);
+		if (!t.ok) return t.response!;
+
 		let body: {
-			pass?: unknown;
 			to?: unknown;
 			subject?: unknown;
 			text?: unknown;
@@ -50,9 +53,6 @@ export const sendmail: Service = {
 			return json({ error: 'invalid JSON body' }, 400);
 		}
 
-		if (body?.pass !== ADMIN_PASS) {
-			return json({ error: 'admin pass required' }, 401);
-		}
 		if (typeof body.to !== 'string' || !body.to.includes('@')) {
 			return json({ error: 'valid `to` email required' }, 400);
 		}

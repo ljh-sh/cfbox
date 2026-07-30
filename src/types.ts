@@ -24,12 +24,8 @@ export interface Env {
 	 * `wrangler secret put CFBOX_TOKEN`. Fail-closed: unset → gated services 401.
 	 */
 	CFBOX_TOKEN?: string;
-	/**
-	 * Optional path secret. When set, real endpoints live only at
-	 * `/<secret>/api/v2/<svc>`. All other paths return 404 (no exposure of
-	 * which routes exist). Set via `wrangler secret put CFBOX_PATHSECRET`.
-	 */
-	CFBOX_PATHSECRET?: string;
+	// Note: path secret is configured in src/config.ts (pathSecret const),
+	// not as an env var. It's a deployment config, not a runtime secret.
 }
 
 /**

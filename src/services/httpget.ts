@@ -253,15 +253,14 @@ export const httpget: Service = {
 
 		// Rate limit (per-IP, or per-token when CFBOX_TOKEN is set) + SSRF guard
 		// on target URL. Also block the request's own host to prevent loopback
-		// amplification.
+		// amplification. Public read; no token required (privacy rule: user traffic).
 		const selfHost = new URL(req.url).hostname.toLowerCase();
 		const pre = await preflight(req, env, {
 			route: 'httpget',
-			limit: 30,
-			windowSec: 60,
+			limit: 5,
+			windowSec: 30,
 			targetUrl: targetUrl ?? undefined,
 			extraDenyHosts: [selfHost],
-			requireToken: true,
 		});
 		if (pre) return pre;
 

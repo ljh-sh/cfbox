@@ -16,6 +16,7 @@
 
 import { registry } from './registry';
 import { checkLockdown } from './safety';
+import { pathSecret } from './config';
 
 export default {
 	async fetch(
@@ -25,9 +26,8 @@ export default {
 	): Promise<Response> {
 		const url = new URL(req.url);
 
-		// 1. Path secret gate. If CFBOX_PATHSECRET is set, only /<secret>/api/v2/<svc>
+		// 1. Path secret gate. If config.pathSecret is set, only /<secret>/api/v2/<svc>
 		//    is recognized. Other paths are 404 (we don't even hint that cfbox lives here).
-		const pathSecret = env.CFBOX_PATHSECRET;
 		if (pathSecret) {
 			const prefix = `/${pathSecret}/api/v2`;
 			if (url.pathname !== prefix && !url.pathname.startsWith(prefix + '/')) {

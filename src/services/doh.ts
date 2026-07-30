@@ -309,13 +309,12 @@ export const doh: Service = {
 		const url = new URL(req.url);
 		const path = url.pathname;
 
-		// Token gate + per-bucket rate limit. Outbound is fixed (1.1.1.1), so
-		// no SSRF surface.
+		// Per-bucket rate limit. Outbound is fixed (1.1.1.1), so no SSRF surface.
+		// Public read; no token needed.
 		const pre = await preflight(req, env, {
 			route: 'doh',
 			limit: 60,
 			windowSec: 60,
-			requireToken: true,
 		});
 		if (pre) return pre;
 

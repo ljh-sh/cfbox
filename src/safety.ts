@@ -243,20 +243,6 @@ export async function readBoundedBody(req: Request, maxBytes: number): Promise<U
 // ----- Pre-flight (rate limit + URL guard, no body) ----------------------
 
 export interface PreflightOpts {
-	route: string;
-	limit: number;
-	windowSec: number;
-	targetUrl?: string;
-	extraDenyHosts?: string[];
-	/**
-	 * When true, the request must carry a valid token (or CFBOX_TOKEN must be
-	 * unset → public mode). The rate-limit bucket is keyed on the token
-	 * hash (or per-IP in public mode).
-	 */
-	requireToken?: boolean;
-}
-
-export interface PreflightOpts {
 	/** Route name from config.ts (or any custom key for ad-hoc). */
 	route: string;
 	/** Override the route's configured rate limit. Optional. */
@@ -268,8 +254,13 @@ export interface PreflightOpts {
 	/**
 	 * Override the route's `tokenRequired` flag. If undefined, reads from
 	 * config.ts. Default false (public, with per-IP rate limit).
+	 *
+	 * Legacy alias: `requireToken` (was the original field name; prefer
+	 * `tokenRequired` for new code).
 	 */
 	tokenRequired?: boolean;
+	/** @deprecated Use `tokenRequired`. */
+	requireToken?: boolean;
 }
 
 /**
@@ -347,7 +338,7 @@ export async function preflight(
 	opts: PreflightOpts,
 ): Promise<Response | null> {
 	const cfg = getRouteConfig(opts.route);
-	const tokenRequired = opts.tokenRequired ?? cfg.tokenRequired;
+	const tokenRequired = opts.tokenRequired ?? opts.requireToken ?? cfg.tokenRequired;
 
 	// 1. Lockdown (anonymous only — token-holders bypass).
 	const lock = await checkLockdown(req, env);

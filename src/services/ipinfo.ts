@@ -13,7 +13,7 @@
 // edge.
 
 import type { Service } from '../types';
-import { rateLimit } from '../safety';
+import { preflight } from '../safety';
 
 function json(body: unknown, status = 200): Response {
 	return new Response(JSON.stringify(body, null, 2), {
@@ -228,14 +228,13 @@ export const ipinfo: Service = {
 		},
 	},
 	fetch: async (req, env, ctx) => {
-		// Token gate + per-bucket rate limit. Outbound is fixed (CF DoH + Team
-		// Cymru + ip-api.com), so no SSRF surface — but tighten so we don't
-		// burn ip-api.com's 45 req/min free tier.
+		// Per-bucket rate limit. Outbound is fixed (CF DoH + Team Cymru +
+		// ip-api.com), so no SSRF surface — but tighten so we don't burn
+		// ip-api.com's 45 req/min free tier. Public read; no token needed.
 		const pre = await preflight(req, env, {
 			route: 'ipinfo',
 			limit: 20,
 			windowSec: 60,
-			requireToken: true,
 		});
 		if (pre) return pre;
 

@@ -1,5 +1,15 @@
-// src/config.ts — per-route configuration. Edit this file to tune cfbox
-// without touching service handlers.
+// src/config.ts — per-deployment + per-route configuration. Edit this
+// file to tune cfbox without touching service handlers.
+//
+// **Path secret** — set this to a random string per deployment. When set,
+// real endpoints live only at /<pathSecret>/api/v2/<svc>. All other paths
+// return 404 (no hint at cfbox existence). Default `null` = backward-compat
+// mode (routes at /<svc>).
+//
+//   - pathSecret: null           → /<svc>                  (backward compat)
+//   - pathSecret: 'x7g9k2...'    → /<secret>/api/v2/<svc>   (URL-secret gate)
+//
+// To rotate: change the string, redeploy. Old URLs stop working.
 //
 // **Design principle: token gates operator privacy, not user traffic.**
 //
@@ -24,6 +34,15 @@
 //   - ratePerIP: -1     → disable rate limit (avoid; defense-in-depth)
 //
 // SSRF guard (`safety.ts`) applies to all routes that fetch user-supplied URLs.
+
+/**
+ * Deployment-wide path secret. Operator sets this to a unique random
+ * string per deployment. Generated with e.g. `openssl rand -hex 16`.
+ *
+ * Leave `null` to disable the URL-secret gate (backward-compat mode).
+ * All routes then live at /<svc> under the public hostname.
+ */
+export const pathSecret: string | null = null;
 
 export interface RouteConfig {
 	/** Anonymous rate limit. 0 = block, -1 = disabled, positive = count. */
