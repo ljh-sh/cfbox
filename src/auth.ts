@@ -3,9 +3,10 @@
 // Token is a single shared secret stored in `env.CFBOX_TOKEN` (set via
 // `wrangler secret put CFBOX_TOKEN`).
 //
-// Backward compat: if CFBOX_TOKEN is unset, the worker runs in public mode
-// (no token required). Set the secret to opt-in. This allows staged roll-out
-// and keeps the dev experience low-friction.
+// **Fail-closed**: if CFBOX_TOKEN is unset, all token-required routes
+// return 401. The operator MUST set CFBOX_TOKEN before gated services
+// become accessible. This is the "default safe" guarantee — there is no
+// "public mode" that auto-enables gated endpoints.
 //
 // Token is supplied via either:
 //   - `x-cfbox-token: <token>` header
@@ -15,12 +16,14 @@
 // raw token). Constant-time comparison prevents timing attacks.
 
 export interface TokenInfo {
-	/** True if request is allowed (either token matches, or public mode). */
+	/** True if request is allowed (token matches). */
 	ok: boolean;
-	/** Bucket key for rate-limit. `ip:<ip>` for public mode, `token:<hash>` for authed. */
+	/** Bucket key for rate-limit. `token:<hash>` only if ok=true. */
 	bucket: string;
 	/** 401 response when ok=false. */
 	response?: Response;
+	/** Why the token check failed (only set when ok=false). */
+	reason?: 'unset' | 'missing' | 'invalid';
 }
 
 export interface AuthEnv {
@@ -29,17 +32,31 @@ export interface AuthEnv {
 
 export async function checkToken(req: Request, env: AuthEnv): Promise<TokenInfo> {
 	const expected = env.CFBOX_TOKEN;
+
+	// Fail-closed: if CFBOX_TOKEN is unset, every gated route 401s.
+	// The operator must explicitly set the secret to enable access.
 	if (!expected) {
-		// Public mode — no token configured. The route's `tokenRequired` flag
-		// (in config.ts) decides whether the request is allowed at all.
-		const ip = req.headers.get('cf-connecting-ip') || 'unknown';
-		return { ok: true, bucket: `ip:${ip}` };
+		return {
+			ok: false,
+			bucket: 'unauthenticated',
+			reason: 'unset',
+			response: jsonError(
+				{
+					error: 'token required',
+					reason: 'CFBOX_TOKEN secret is not configured on this worker',
+					hint: 'set CFBOX_TOKEN via `wrangler secret put CFBOX_TOKEN`, then redeploy',
+				},
+				401,
+			),
+		};
 	}
+
 	const provided = extractToken(req);
 	if (!provided) {
 		return {
 			ok: false,
 			bucket: 'unauthenticated',
+			reason: 'missing',
 			response: jsonError(
 				{
 					error: 'token required',
@@ -49,13 +66,16 @@ export async function checkToken(req: Request, env: AuthEnv): Promise<TokenInfo>
 			),
 		};
 	}
+
 	if (!safeEqual(provided, expected)) {
 		return {
 			ok: false,
 			bucket: 'unauthenticated',
+			reason: 'invalid',
 			response: jsonError({ error: 'invalid token' }, 401),
 		};
 	}
+
 	const hash = await sha256Hex(provided);
 	return { ok: true, bucket: `token:${hash.slice(0, 16)}` };
 }
